@@ -11,4 +11,5 @@ export interface Response {
 export abstract class LLMInterface {
 
     abstract prompt(messages: Message[]): Promise<Response>;
+    abstract promptWithStopTokens(messages: Message[], stopSequences: string[]): Promise<Response>;
 }
