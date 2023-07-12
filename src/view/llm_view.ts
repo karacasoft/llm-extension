@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, statfsSync, writeFile
 import { LLMInterface, Message } from '../llm/llm';
 import * as vscode from 'vscode';
 import * as showdown from 'showdown';
+import { summarize, summarizePart } from '../commands/summarize';
 
 const markdownConverter = new showdown.Converter();
 
@@ -10,28 +11,24 @@ Thought: <your thoughts about the problem>
 Action: <a tool name>
 ActionInput: <inputs to the tool>
 Observation: <result of the tool you have used>
-This sequence may repeat a few times in order to reach a conclusion. When you have found the answer finish with the following:
+This sequence may repeat a few times in order to reach a conclusion.
+When you finalize the answer, always finish with the following format
+
 FinalAnswer: <final answer>
 Finished:
+
 Final answer may include multiple lines. It may use markdown and may ask the user for additional information.
 Try to reach a conclusion in 3 or 4 steps. If you cannot do it, let the user know about it by finalizing your answer.
 If you cannot find an answer, you may ask for details.
 Try to guide the user with detailed explanations and code blocks.
 Your tools are as below:
-* read-dir: Uses a path as input. '.' is always the workspace root directory. Returns the files inside the directory given or the root directory if none given.
-* read-file: Reads a file's contents and writes it out. Requires the workspace relative path of the file as input.
-
-Example usage of your tools:
-Action: read-dir
-ActionInput: .
-
-Action: read-file
-ActionInput: ./file.txt
-
+* read-dir: Uses a path as input. . is always the workspace root directory. Returns the files inside the directory given or the root directory if none given.
+* summarize-file: Reads a file's contents and writes it out. Requires the workspace relative path of the file as input.
+* read-part-of-file: Inputs are a prompt and a file path. Explain which part of the file you want to read in prompt. Separate file path with a vertical line(|). Example: api request base code | api.py
 Only the final answer will be shown to the user. Try to be as helpful as possible.
 `;
 
-async function doAction(action: string, actionInput: string, codeBlock?: string) {
+async function doAction(action: string, actionInput: string, llm: LLMInterface, codeBlock?: string) {
     const dir = vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders[0] : undefined;
     if(!dir) {
         return `These commands work only in a workspace. Tell the user to open a workspace to access these features.`;
@@ -55,7 +52,7 @@ ${readdirSync(actionInput, { withFileTypes: true }).map(dirent => {
         } else {
             return "File does not exist";
         }
-    } else if(action === 'read-file') {
+    } else if(action === 'summarize-file') {
         const file = vscode.Uri.joinPath(dir.uri, actionInput);
         actionInput = file.fsPath;
         if(!existsSync(actionInput)) {
@@ -64,9 +61,9 @@ ${readdirSync(actionInput, { withFileTypes: true }).map(dirent => {
         if(lstatSync(actionInput).isDirectory()) {
             return `${origInput} is a directory`;
         }
-        return `Contents of the file:
+        return `Summary of the contents of the file:
 \`\`\`
-${readFileSync(actionInput)}
+${await summarize(readFileSync(actionInput, 'utf8'), llm)}
 \`\`\`
 `
     } else if(action === 'write-file') {
@@ -80,6 +77,21 @@ ${readFileSync(actionInput)}
         }
         writeFileSync(actionInput, codeBlock)
         return `Written ${codeBlock.length} bytes`;
+    } else if(action === 'read-part-of-file') {
+        if(actionInput === '') {
+            return `No inputs were provided`;
+        }
+        const part = actionInput.split('|')[0].trim();
+        const filename = actionInput.split('|')[1].trim();
+        const file = vscode.Uri.joinPath(dir.uri, filename);
+        if(!existsSync(actionInput)) {
+            return "File does not exist. Check if it exists using *read-dir* tool";
+        }
+        if(lstatSync(actionInput).isDirectory()) {
+            return `${origInput} is a directory`;
+        }
+        const summary = await summarizePart(readFileSync(file.fsPath, 'utf8'), part, llm);
+        return summary;
     }
     return "Action not found, action can only be read-file or read-dir";
 }
@@ -115,7 +127,7 @@ async function chainCall(input: string, llm: LLMInterface, messagesSoFar: Messag
             }
         }
 
-        const actionResult = await doAction(action, actionInput, codeBlock);
+        const actionResult = await doAction(action, actionInput, llm, codeBlock);
         console.log("Observation: " + actionResult + "\n\n");
 
         messagesCopy.push({

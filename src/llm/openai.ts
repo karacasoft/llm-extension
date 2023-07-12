@@ -19,6 +19,7 @@ export class OpenAILLMInterface extends LLMInterface {
                 name: m.name,
                 content: `${m.name}: ${m.content}`,
             })),
+            temperature: 0,
         });
         return {
             content: result.data.choices[0].message?.content ?? "",
@@ -34,6 +35,7 @@ export class OpenAILLMInterface extends LLMInterface {
                 content: m.content,
             })),
             stop: stopSequences,
+            temperature: 0,
         });
         return {
             content: result.data.choices[0].message?.content ?? "",
